@@ -1,0 +1,32 @@
+# Виртуальное окружение Python
+venv/
+.venv/
+
+# Кэш и скомпилированные файлы Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Переменные окружения с секретами
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+*.log
+
+# Тесты и покрытие
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Ruff
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
