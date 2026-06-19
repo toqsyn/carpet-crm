@@ -11,8 +11,8 @@
 from sqlalchemy import BigInteger, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.carpet_crm.db.base import Base, TimestampMixin
-from src.carpet_crm.db.enums import OrderStatus
+from carpet_crm.db.base import Base, TimestampMixin
+from carpet_crm.db.enums import OrderStatus
 
 
 class Client(Base, TimestampMixin):
