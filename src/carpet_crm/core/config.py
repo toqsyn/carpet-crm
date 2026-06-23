@@ -9,8 +9,6 @@
 
 from functools import lru_cache
 
-from typing import Optional
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,7 +31,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str
     """Токен бота, полученный от @BotFather."""
 
-    telegram_operator_chat_id: Optional[int] = None
+    telegram_operator_chat_id: int | None = None
     """ID чата/группы операторов. Используется для уведомлений.
     Может быть не задан на старте проекта.
     """
