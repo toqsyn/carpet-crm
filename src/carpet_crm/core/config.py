@@ -12,6 +12,16 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _parse_chat_ids(raw: str) -> set[int]:
+    """Парсит строку вида "111, 222,333" в {111, 222, 333}.
+
+    Пустые элементы (например, из-за лишней запятой или пустой строки
+    целиком) пропускаются, а не вызывают ошибку — конфигурация ролей
+    не должна "падать" из-за опечатки с лишним пробелом или запятой.
+    """
+    return {int(chat_id.strip()) for chat_id in raw.split(",") if chat_id.strip()}
+
+
 class Settings(BaseSettings):
     """Настройки приложения, загружаемые из переменных окружения."""
 
@@ -31,10 +41,63 @@ class Settings(BaseSettings):
     telegram_bot_token: str
     """Токен бота, полученный от @BotFather."""
 
-    telegram_operator_chat_id: int | None = None
-    """ID чата/группы операторов. Используется для уведомлений.
-    Может быть не задан на старте проекта.
+    # --- Telegram: роли сотрудников ---
+    telegram_admin_chat_ids: str = ""
+    """Список chat_id администраторов через запятую.
+    Полный доступ ко всем инструментам — используется владельцем
+    бизнеса/разработчиком для тестирования и ручного управления.
     """
+
+    telegram_operator_chat_ids: str = ""
+    """Список chat_id операторов через запятую, например: "111,222".
+    Операторы могут создавать заказы (create_order).
+    """
+
+    telegram_delivery_chat_ids: str = ""
+    """Список chat_id сотрудников доставки через запятую.
+    Доставка может менять статус и указывать количество ковров.
+    """
+
+    telegram_washer_chat_ids: str = ""
+    """Список chat_id мойщиков через запятую.
+    Мойщики могут переводить заказ в статус in_progress.
+    """
+
+    telegram_packer_chat_ids: str = ""
+    """Список chat_id упаковщиков через запятую.
+    Упаковщик завершает заказ после сушки и упаковки, выставляя
+    статус READY. Отдельного статуса PACKAGING пока нет — это
+    сознательное упрощение MVP (см. permissions.py); реальный
+    процесс шире: доставка забирает -> мойщик моет -> упаковщик
+    упаковывает после сушки -> доставка везёт обратно. Когда дойдём
+    до пересмотра бизнес-процесса целиком, появится отдельный статус.
+    """
+    @property
+    def admin_chat_ids(self) -> set[int]:
+        return _parse_chat_ids(self.telegram_admin_chat_ids)
+
+    @property
+    def operator_chat_ids(self) -> set[int]:
+        """Распарсенный набор chat_id операторов.
+
+        Хранится в .env как простая строка через запятую (легко
+        редактировать руками), но остальному коду удобнее работать
+        с set[int] для быстрой проверки "содержится ли" и без риска
+        дублирования значений.
+        """
+        return _parse_chat_ids(self.telegram_operator_chat_ids)
+
+    @property
+    def delivery_chat_ids(self) -> set[int]:
+        return _parse_chat_ids(self.telegram_delivery_chat_ids)
+
+    @property
+    def washer_chat_ids(self) -> set[int]:
+        return _parse_chat_ids(self.telegram_washer_chat_ids)
+
+    @property
+    def packer_chat_ids(self) -> set[int]:
+        return _parse_chat_ids(self.telegram_packer_chat_ids)
 
     # --- AI-провайдер ---
     ai_provider: str = "gemini"

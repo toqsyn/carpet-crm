@@ -103,13 +103,37 @@ def _to_gemini_tool(tool_schema: dict[str, Any]) -> types.Tool:
 
 
 async def process_chat_message(
-    text: str, *, order_service: OrderService, created_by_chat_id: int
+    text: str,
+    *,
+    order_service: OrderService,
+    created_by_chat_id: int,
+    allowed_tool_names: set[str],
 ) -> AgentResult:
-    """Обрабатывает текст от сотрудника, вызывая нужный инструмент(ы)."""
+    """Обрабатывает текст от сотрудника, вызывая нужный инструмент(ы).
+
+    Args:
+        text: Текст сообщения/переписки, который нужно проанализировать.
+        order_service: Сервис, через который реально выполняется
+            бизнес-операция после того, как AI решил какой инструмент
+            вызвать и с какими параметрами.
+        created_by_chat_id: Telegram chat_id сотрудника, отправившего
+            сообщение — для аудита, кто инициировал действие.
+        allowed_tool_names: Имена инструментов, доступных роли этого
+            сотрудника (см. bot/permissions.py). Фильтрация происходит
+            до отправки в Gemini: модель не увидит и не сможет
+            предложить вызов инструмента, недоступного этой роли, —
+            это надёжнее, чем полагаться на проверку постфактум.
+    """
     settings = get_settings()
     client = _build_client()
 
-    gemini_tools = [_to_gemini_tool(tool) for tool in ALL_TOOLS]
+    available_tools = [tool for tool in ALL_TOOLS if tool["name"] in allowed_tool_names]
+    if not available_tools:
+        return AgentResult(
+            reply_text="У вас нет доступа ни к одному действию в этой системе."
+        )
+
+    gemini_tools = [_to_gemini_tool(tool) for tool in available_tools]
 
     response = client.models.generate_content(
         model=settings.ai_model,
