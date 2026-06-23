@@ -44,7 +44,7 @@ class OrderService:
         await self._session.commit()
         return order
 
-    async def update_status(self, order_id: int, new_status: OrderStatus) -> Order | None:
+    async def   update_status(self, order_id: int, new_status: OrderStatus) -> Order | None:
         """Меняет статус заказа."""
         order = await self._orders.update_status(order_id, new_status)
         if order is None:
