@@ -13,7 +13,7 @@ SDK провайдера (google-genai). Если в будущем потреб
 данные, и это не должно дойти до базы данных без проверки.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from google import genai
@@ -36,16 +36,54 @@ SYSTEM_PROMPT = """\
 - Никогда не придумывай данные, которых нет в тексте явно.
 - Если данных недостаточно для вызова инструмента — не вызывай его,
   и кратко объясни словами, какая информация отсутствует.
+- Если в одном сообщении упомянуто несколько действий — например,
+  одновременно смена статуса заказа и конкретное количество ковров
+  ("забрали 3 ковра по заказу 5") — вызови ВСЕ соответствующие
+  инструменты за один ответ, а не только один из них.
 """
 
 
 @dataclass
-class AgentResult:
-    """Результат обработки сообщения AI-агентом."""
+class ToolExecutionResult:
+    """Результат выполнения одного инструмента.
+
+    Раньше агент поддерживал только один вызов функции за раз.
+    Gemini физически может вернуть несколько function_call в одном
+    ответе (например, на "забрали 3 ковра по заказу 5" — одновременно
+    update_order_status и update_carpet_count). Чтобы это можно было
+    обработать, каждый отдельный вызов теперь даёт свой собственный
+    результат, а AgentResult (см. ниже) объединяет их все.
+    """
 
     reply_text: str
     tool_name: str | None = None
     success: bool = False
+
+
+@dataclass
+class AgentResult:
+    """Результат обработки сообщения AI-агентом.
+
+    tool_results может содержать 0 (модель ответила текстом без
+    действия), 1 (обычный случай) или несколько элементов (модель
+    решила, что нужно выполнить несколько действий сразу).
+    reply_text — объединённый текст для показа пользователю, success —
+    True только если ВСЕ вызванные инструменты выполнились успешно.
+    """
+
+    reply_text: str
+    tool_results: list[ToolExecutionResult] = field(default_factory=list)
+
+    @property
+    def success(self) -> bool:
+        return bool(self.tool_results) and all(r.success for r in self.tool_results)
+
+    @property
+    def tool_name(self) -> str | None:
+        """Имя первого вызванного инструмента, для обратной совместимости
+        с кодом, который интересуется только "что вообще было вызвано".
+        """
+        return self.tool_results[0].tool_name if self.tool_results else None
 
 
 def _build_client() -> genai.Client:
@@ -67,7 +105,7 @@ def _to_gemini_tool(tool_schema: dict[str, Any]) -> types.Tool:
 async def process_chat_message(
     text: str, *, order_service: OrderService, created_by_chat_id: int
 ) -> AgentResult:
-    """Обрабатывает текст от сотрудника, вызывая нужный инструмент."""
+    """Обрабатывает текст от сотрудника, вызывая нужный инструмент(ы)."""
     settings = get_settings()
     client = _build_client()
 
@@ -82,27 +120,29 @@ async def process_chat_message(
         ),
     )
 
-    function_call = _extract_function_call(response)
-    if function_call is None:
+    function_calls = _extract_function_calls(response)
+    if not function_calls:
         return AgentResult(reply_text=response.text or "Не удалось обработать сообщение.")
 
-    return await _execute_tool(
-        function_call,
-        order_service=order_service,
-        created_by_chat_id=created_by_chat_id,
-    )
+    tool_results = [
+        await _execute_tool(call, order_service=order_service, created_by_chat_id=created_by_chat_id)
+        for call in function_calls
+    ]
+
+    combined_reply = "\n".join(r.reply_text for r in tool_results)
+    return AgentResult(reply_text=combined_reply, tool_results=tool_results)
 
 
-def _extract_function_call(response: Any) -> types.FunctionCall | None:
-    """Достаёт вызов инструмента из ответа Gemini, если модель его сделала."""
+def _extract_function_calls(response: Any) -> list[types.FunctionCall]:
+    """Достаёт ВСЕ вызовы инструментов из ответа Gemini."""
     if not response.candidates:
-        return None
+        return []
 
-    for part in response.candidates[0].content.parts:
-        if part.function_call is not None:
-            return part.function_call
-
-    return None
+    return [
+        part.function_call
+        for part in response.candidates[0].content.parts
+        if part.function_call is not None
+    ]
 
 
 async def _execute_tool(
@@ -110,7 +150,7 @@ async def _execute_tool(
     *,
     order_service: OrderService,
     created_by_chat_id: int,
-) -> AgentResult:
+) -> ToolExecutionResult:
     """Выполняет инструмент, который решил вызвать Gemini."""
     name = function_call.name
     args = dict(function_call.args or {})
@@ -120,7 +160,7 @@ async def _execute_tool(
         order = await order_service.create_order_from_chat(
             order_data, created_by_chat_id=created_by_chat_id
         )
-        return AgentResult(
+        return ToolExecutionResult(
             reply_text=(
                 f"Заказ #{order.id} создан для {order.client.full_name} "
                 f"({order.client.phone}), адрес: {order.address}."
@@ -134,10 +174,10 @@ async def _execute_tool(
         new_status = OrderStatus(args["new_status"])
         order = await order_service.update_status(order_id, new_status)
         if order is None:
-            return AgentResult(
+            return ToolExecutionResult(
                 reply_text=f"Заказ #{order_id} не найден.", tool_name=name, success=False
             )
-        return AgentResult(
+        return ToolExecutionResult(
             reply_text=f"Заказ #{order.id}: статус обновлён на {order.status}.",
             tool_name=name,
             success=True,
@@ -148,15 +188,15 @@ async def _execute_tool(
         carpet_count = int(args["carpet_count"])
         order = await order_service.update_carpet_count(order_id, carpet_count)
         if order is None:
-            return AgentResult(
+            return ToolExecutionResult(
                 reply_text=f"Заказ #{order_id} не найден.", tool_name=name, success=False
             )
-        return AgentResult(
+        return ToolExecutionResult(
             reply_text=f"Заказ #{order.id}: количество ковров обновлено на {order.carpet_count}.",
             tool_name=name,
             success=True,
         )
 
-    return AgentResult(
+    return ToolExecutionResult(
         reply_text=f"Модель вызвала неизвестный инструмент: {name}", success=False
     )
