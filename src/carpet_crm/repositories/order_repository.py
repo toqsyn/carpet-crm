@@ -38,8 +38,17 @@ class OrderRepository:
         created_by_chat_id: int,
         carpet_count: int | None = None,
         notes: str | None = None,
-    ) -> Order:
-        """Создаёт новый заказ со статусом NEW."""
+        ) -> Order:
+        """Создаёт новый заказ со статусом NEW.
+
+        После flush() выполняется refresh() с явным attribute_names,
+        который подгружает relationship `client` сразу, в той же
+        async-сессии. Без этого обращение к order.client после
+        возврата из сервиса (например, в хендлере бота, который хочет
+        написать "заказ создан для {order.client.full_name}") упало бы
+        с MissingGreenlet — SQLAlchemy не может сделать ленивую
+        (lazy) подгрузку связи неявно в асинхронном режиме.
+        """
         order = Order(
             client_id=client_id,
             address=address,
@@ -50,6 +59,7 @@ class OrderRepository:
         )
         self._session.add(order)
         await self._session.flush()
+        await self._session.refresh(order, attribute_names=["client"])
         return order
 
     async def update_status(self, order_id: int, new_status: OrderStatus) -> Order | None:
