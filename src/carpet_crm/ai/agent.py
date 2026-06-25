@@ -125,14 +125,13 @@ async def process_chat_message(
             это надёжнее, чем полагаться на проверку постфактум.
     """
     settings = get_settings()
-    client = _build_client()
-
     available_tools = [tool for tool in ALL_TOOLS if tool["name"] in allowed_tool_names]
     if not available_tools:
         return AgentResult(
             reply_text="У вас нет доступа ни к одному действию в этой системе."
         )
 
+    client = _build_client()
     gemini_tools = [_to_gemini_tool(tool) for tool in available_tools]
 
     response = client.models.generate_content(
